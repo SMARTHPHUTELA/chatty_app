@@ -1,0 +1,211 @@
+import streamlit as st
+
+from langgraph.types import Command
+from langchain_core.messages import HumanMessage
+
+from app.graph import graph
+
+
+# ---------------- PAGE CONFIG ---------------- #
+
+st.set_page_config(
+    page_title="AI Clinic Assistant",
+    page_icon="🏥",
+    layout="centered"
+)
+
+
+# ---------------- SESSION STATE ---------------- #
+
+if "thread_id" not in st.session_state:
+    st.session_state.thread_id = "patient-1"
+
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
+if "waiting_for_interrupt" not in st.session_state:
+    st.session_state.waiting_for_interrupt = False
+
+if "interrupt_message" not in st.session_state:
+    st.session_state.interrupt_message = ""
+
+
+# ---------------- CONFIG ---------------- #
+
+config = {
+    "configurable": {
+        "thread_id": st.session_state.thread_id
+    }
+}
+
+
+# ---------------- HEADER ---------------- #
+
+st.title("🏥 AI Clinic Assistant")
+
+st.markdown(
+    """
+This assistant can:
+- Book appointments
+- Cancel bookings
+- Detect urgent cases
+- Ask for confirmation
+- Resume workflows using LangGraph interrupts
+"""
+)
+
+st.divider()
+
+
+# ---------------- DISPLAY CHAT HISTORY ---------------- #
+
+for message in st.session_state.chat_history:
+
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+
+# ---------------- NORMAL USER INPUT ---------------- #
+
+if not st.session_state.waiting_for_interrupt:
+
+    user_input = st.chat_input("Type your message...")
+
+    if user_input:
+
+        # store user message
+        st.session_state.chat_history.append(
+            {
+                "role": "user",
+                "content": user_input
+            }
+        )
+
+        # display user message
+        with st.chat_message("user"):
+            st.markdown(user_input)
+
+        # run graph
+        result = graph.invoke(
+            {
+                "messages": [
+                    HumanMessage(content=user_input)
+                ]
+            },
+            config=config
+        )
+
+        # ---------------- INTERRUPT HANDLING ---------------- #
+
+        if "__interrupt__" in result:
+
+            interrupt_data = result["__interrupt__"][0].value
+
+            interrupt_message = interrupt_data["message"]
+
+            st.session_state.waiting_for_interrupt = True
+
+            st.session_state.interrupt_message = interrupt_message
+
+            st.session_state.chat_history.append(
+                {
+                    "role": "assistant",
+                    "content": interrupt_message
+                }
+            )
+
+            with st.chat_message("assistant"):
+                st.markdown(interrupt_message)
+
+        # ---------------- NORMAL RESPONSE ---------------- #
+
+        else:
+
+            response = result.get(
+                "response",
+                "Workflow completed"
+            )
+
+            st.session_state.chat_history.append(
+                {
+                    "role": "assistant",
+                    "content": response
+                }
+            )
+
+            with st.chat_message("assistant"):
+                st.markdown(response)
+
+
+# ---------------- RESUME INTERRUPT FLOW ---------------- #
+
+else:
+
+    st.warning("Workflow paused. Waiting for your response.")
+
+    human_response = st.chat_input(
+        "Enter confirmation / approval response..."
+    )
+
+    if human_response:
+
+        # store user response
+        st.session_state.chat_history.append(
+            {
+                "role": "user",
+                "content": human_response
+            }
+        )
+
+        # display user response
+        with st.chat_message("user"):
+            st.markdown(human_response)
+
+        # resume graph
+        resumed = graph.invoke(
+            Command(resume=human_response),
+            config=config
+        )
+
+        # reset interrupt state
+        st.session_state.waiting_for_interrupt = False
+
+        st.session_state.interrupt_message = ""
+
+        # check if another interrupt appears
+        if "__interrupt__" in resumed:
+
+            interrupt_data = resumed["__interrupt__"][0].value
+
+            interrupt_message = interrupt_data["message"]
+
+            st.session_state.waiting_for_interrupt = True
+
+            st.session_state.interrupt_message = interrupt_message
+
+            st.session_state.chat_history.append(
+                {
+                    "role": "assistant",
+                    "content": interrupt_message
+                }
+            )
+
+            with st.chat_message("assistant"):
+                st.markdown(interrupt_message)
+
+        else:
+
+            final_response = resumed.get(
+                "response",
+                "Workflow completed"
+            )
+
+            st.session_state.chat_history.append(
+                {
+                    "role": "assistant",
+                    "content": final_response
+                }
+            )
+
+            with st.chat_message("assistant"):
+                st.markdown(final_response)
